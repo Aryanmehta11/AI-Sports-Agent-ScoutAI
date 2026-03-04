@@ -1,96 +1,133 @@
 import os
-from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_tavily import TavilySearch 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_tavily import TavilySearch
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
+from typing import TypedDict
 
 load_dotenv()
 
-# 1. State Definition
-class AgentState(TypedDict):
-    messages: Annotated[list[BaseMessage], add_messages]
-
-# 2. Setup (Try 'gemini-1.5-flash' without the models/ prefix)
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
-
-search_tool = TavilySearch(max_results=3)
-tools = [search_tool]
-llm_with_tools = llm.bind_tools(tools)
-
-# 3. Nodes
-def call_model(state: AgentState):
-    # We define the persona here
-    system_message = SystemMessage(
-content="""
-You are ScoutAI, an AI sports script writer.
-
-Your job is NOT to answer questions.
-
-Your job is to generate a SHORTS / Instagram Reel script for sports creators.
-
-Always follow this structure:
-
-🎬 SHORTS SCRIPT
-
-HOOK:
-(max 8 words, very attention grabbing)
-
-FACT:
-(1 strong stat about the player)
-
-TWIST:
-(1 surprising insight)
-
-ENGAGEMENT:
-(ask viewers a question)
-
-Rules:
-- keep it under 25 seconds speaking time
-- make it dramatic and viral
-- always try to use stats tools when discussing players
-"""
+# LLM
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0.3
 )
-    messages = [system_message] + state['messages']
-    
-    # We call the model
-    response = llm_with_tools.invoke(messages)
-    return {"messages": [response]}
 
-tool_node = ToolNode(tools)
+# Search Tool
+search_tool = TavilySearch(max_results=5)
 
-# 4. Router
-def should_continue(state: AgentState):
-    last_message = state['messages'][-1]
-    if last_message.tool_calls:
-        return "tools"
-    return END
+# State
+class AgentState(TypedDict):
+    question: str
+    research: str
+    analysis: str
+    content: str
 
-# 5. Graph Construction
-workflow = StateGraph(AgentState)
-workflow.add_node("agent", call_model)
-workflow.add_node("tools", tool_node)
-workflow.set_entry_point("agent")
-workflow.add_conditional_edges("agent", should_continue)
-workflow.add_edge("tools", "agent")
 
-app = workflow.compile()
+# -----------------------------
+# NODE 1 — Research
+# -----------------------------
+def research_node(state):
 
+    question = state["question"]
+
+    results = search_tool.invoke(question)
+
+    return {"research": str(results)}
+
+
+# -----------------------------
+# NODE 2 — Match Analyst
+# -----------------------------
+def analysis_node(state):
+
+    prompt = f"""
+You are a professional cricket and football analyst.
+
+Based on this research:
+
+{state['research']}
+
+Answer the question:
+{state['question']}
+
+Explain:
+
+1. match summary
+2. why the team lost
+3. turning point
+4. key player
+"""
+
+    response = llm.invoke(prompt)
+
+    return {"analysis": response.content}
+
+
+# -----------------------------
+# NODE 3 — Content Generator
+# -----------------------------
+def content_node(state):
+
+    prompt = f"""
+You are a YouTube sports creator assistant.
+
+Based on this analysis:
+
+{state['analysis']}
+
+Generate:
+
+3 viral hooks
+3 YouTube titles
+Shorts script
+
+Script format:
+
+HOOK
+FACT
+TWIST
+ENGAGEMENT
+"""
+
+    response = llm.invoke(prompt)
+
+    return {"content": response.content}
+
+
+# -----------------------------
+# BUILD GRAPH
+# -----------------------------
+builder = StateGraph(AgentState)
+
+builder.add_node("research", research_node)
+builder.add_node("analysis", analysis_node)
+builder.add_node("content", content_node)
+
+builder.set_entry_point("research")
+
+builder.add_edge("research", "analysis")
+builder.add_edge("analysis", "content")
+builder.add_edge("content", END)
+
+app = builder.compile()
+
+
+# -----------------------------
+# RUN AGENT
+# -----------------------------
 if __name__ == "__main__":
-    # Simplified query for testing
-    query = "What is the current score of South Africa vs New Zealand in World Cup 2026?"
-    inputs = {"messages": [HumanMessage(content=query)]}
-    
-    print("--- 🕵️ Starting Agent ---")
-    try:
-        for output in app.stream(inputs, stream_mode="updates"):
-            for key, value in output.items():
-                print(f"\n[Node: {key}]")
-                if "messages" in value:
-                    print(value["messages"][-1])
-    except Exception as e:
-        print(f"\n❌ Error Caught: {e}")
+
+    question = input("\nAsk a sports question: ")
+
+    result = app.invoke({
+        "question": question
+    })
+
+    print("\n===== MATCH ANALYSIS =====\n")
+    print(result["analysis"])
+
+    print("\n===== CREATOR CONTENT =====\n")
+    print(result["content"])
