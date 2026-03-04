@@ -1,123 +1,129 @@
-import os
-from dotenv import load_dotenv
+import json
+import asyncio
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_tavily import TavilySearch
-from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, END
+from dotenv import load_dotenv
 from typing import TypedDict
+
+from langgraph.graph import StateGraph, END
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+from prompts import context_prompt, analysis_prompt, content_prompt
+from mcp_client import call_mcp_tool
 
 load_dotenv()
 
-# LLM
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     temperature=0.3
 )
 
-# Search Tool
-search_tool = TavilySearch(max_results=5)
 
-# State
 class AgentState(TypedDict):
+
     question: str
-    research: str
+    context: dict
+    data: dict
     analysis: str
     content: str
 
 
-# -----------------------------
-# NODE 1 — Research
-# -----------------------------
-def research_node(state):
+# -------- Context Extraction --------
+
+def extract_context(state):
 
     question = state["question"]
 
-    results = search_tool.invoke(question)
-
-    return {"research": str(results)}
-
-
-# -----------------------------
-# NODE 2 — Match Analyst
-# -----------------------------
-def analysis_node(state):
-
     prompt = f"""
-You are a professional cricket and football analyst.
+{context_prompt}
 
-Based on this research:
-
-{state['research']}
-
-Answer the question:
-{state['question']}
-
-Explain:
-
-1. match summary
-2. why the team lost
-3. turning point
-4. key player
+Question:
+{question}
 """
 
-    response = llm.invoke(prompt)
+    res = llm.invoke(prompt)
 
-    return {"analysis": response.content}
+    try:
+        context = json.loads(res.content)
+    except:
+        context = {}
 
-
-# -----------------------------
-# NODE 3 — Content Generator
-# -----------------------------
-def content_node(state):
-
-    prompt = f"""
-You are a YouTube sports creator assistant.
-
-Based on this analysis:
-
-{state['analysis']}
-
-Generate:
-
-3 viral hooks
-3 YouTube titles
-Shorts script
-
-Script format:
-
-HOOK
-FACT
-TWIST
-ENGAGEMENT
-"""
-
-    response = llm.invoke(prompt)
-
-    return {"content": response.content}
+    return {"context": context}
 
 
-# -----------------------------
-# BUILD GRAPH
-# -----------------------------
+# -------- Fetch Match Data --------
+
+def fetch_data(state):
+
+    context = state["context"]
+
+    # Example MCP tool
+    data = asyncio.run(
+        call_mcp_tool(
+        "V3_-_Last_x_Fixtures_that_were_played",
+        {
+            "league": 140,   # La Liga
+            "season": 2023,
+            "last": 5
+        }
+    )
+    )
+
+    return {"data": data}
+
+
+# -------- Match Analysis --------
+
+def analyze_match(state):
+
+    question = state["question"]
+    data = state["data"]
+
+    prompt = analysis_prompt.format(
+        data=data,
+        question=question
+    )
+
+    res = llm.invoke(prompt)
+
+    return {"analysis": res.content}
+
+
+# -------- Content Generator --------
+
+def generate_content(state):
+
+    analysis = state["analysis"]
+
+    prompt = content_prompt.format(
+        analysis=analysis
+    )
+
+    res = llm.invoke(prompt)
+
+    return {"content": res.content}
+
+
+# -------- Build Graph --------
+
 builder = StateGraph(AgentState)
 
-builder.add_node("research", research_node)
-builder.add_node("analysis", analysis_node)
-builder.add_node("content", content_node)
+builder.add_node("context", extract_context)
+builder.add_node("fetch", fetch_data)
+builder.add_node("analysis", analyze_match)
+builder.add_node("content", generate_content)
 
-builder.set_entry_point("research")
+builder.set_entry_point("context")
 
-builder.add_edge("research", "analysis")
+builder.add_edge("context", "fetch")
+builder.add_edge("fetch", "analysis")
 builder.add_edge("analysis", "content")
 builder.add_edge("content", END)
 
 app = builder.compile()
 
 
-# -----------------------------
-# RUN AGENT
-# -----------------------------
+# -------- Run Agent --------
+
 if __name__ == "__main__":
 
     question = input("\nAsk a sports question: ")
