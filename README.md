@@ -28,7 +28,7 @@ You type one question
            │
            ▼
 ┌─────────────────────┐
-│   route_and_fetch   │  Picks the right tool from 64 available
+│   route_and_fetch   │  Picks the right tool from the tested football MCP tools
 │    (Logic Node)     │  Calls RapidAPI via MCP protocol
 └──────────┬──────────┘
            │
@@ -59,7 +59,7 @@ Three things that make it an **agent** and not a chatbot:
 | LLM | Gemini 2.5 Flash | Fast, cheap, great at structured output |
 | Orchestration | LangGraph | State machine for multi-step agent pipelines |
 | Tool Protocol | MCP (Model Context Protocol) | Anthropic's open standard for AI tool use |
-| Data Source | RapidAPI — Free Football Data | 64 live tools: transfers, news, fixtures |
+| Data Source | RapidAPI — Free football data | Agent built around 5 tested football MCP tool endpoints |
 | Language | Python 3.10+ | - |
 | Config | python-dotenv | Keep API keys out of code |
 
@@ -69,7 +69,7 @@ Three things that make it an **agent** and not a chatbot:
 
 - ⏱️ Research time: **3–4 hours → under 60 seconds**
 - 📦 Output per run: **3 titles + 3 hooks + 60s script + caption + 5 story slides**
-- 🔧 Tools tested: **all 64 API endpoints** — 5 confirmed working on free tier
+- 🔧 Tools tested: multiple MCP football endpoints; 5 working endpoints are used by the agent
 - 🚫 Zero hallucination: agent uses **only live fetched data**, not LLM memory
 
 ---
@@ -79,13 +79,15 @@ Three things that make it an **agent** and not a chatbot:
 ```
 ScoutAI/
 │
+├── analyst_v1.py       # Main agent — LangGraph pipeline
 ├── mcp_client.py       # Connects to RapidAPI via MCP protocol
 ├── config.py           # League name → verified ID mappings
 ├── tool_router.py      # Intent → tool name + args (the decision engine)
 ├── prompts.py          # All 3 LLM instructions (routing, analysis, content)
-├── analyst_v1.py       # Main agent — LangGraph pipeline
-│
-│
+├── discover_tools.py   # Helper script for probing MCP tool endpoints
+├── find_league_ids.py  # Helper script for discovering league IDs
+├── test_mcp.py         # MCP tool sanity checks
+├── test_mcp_connection.py # MCP connection test
 ├── mcp.json            # MCP server config (RapidAPI connection)
 ├── .env                # API keys (never commit this)
 ├── .gitignore
@@ -196,11 +198,11 @@ For the question *"What are the biggest transfers right now?"* you get:
 
 ## 🧠 Key Engineering Decisions
 
-**Two-phase LLM use** — first call extracts structured JSON intent (routing, low creativity). Second call generates content (high creativity). Separating them means you can swap either independently.
+**Multi-phase LLM use** — first call extracts structured JSON intent, second call analyzes the fetched data, and third call generates the final content. Separating these stages makes it easier to swap or tune each phase independently.
 
 **MCP over direct REST** — building on the protocol Claude, Cursor, and the industry are standardising on. Future-proof by design.
 
-**Honest fallback** — discovered that 59 of 64 API endpoints fail on the free tier. Built automatic fallback logic so the agent always produces output regardless.
+**Honest fallback** — discovery showed that many endpoints fail on the free tier. Built automatic fallback logic so the agent always produces output regardless.
 
 **Windows asyncio fix** — `WindowsProactorEventLoopPolicy` required for subprocess-based MCP on Windows. Documented here so you don't spend 2 hours debugging it.
 
